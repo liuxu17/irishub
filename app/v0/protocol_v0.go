@@ -22,11 +22,11 @@ import (
 	"github.com/irisnet/irishub/modules/stake"
 	"github.com/irisnet/irishub/modules/upgrade"
 	sdk "github.com/irisnet/irishub/types"
-	"github.com/irisnet/irishub/types/common"
 	abci "github.com/tendermint/tendermint/abci/types"
 	"sort"
 	"time"
 	govtypes "github.com/irisnet/irishub/types/gov"
+	"github.com/irisnet/irishub/modules/upgrade/params"
 )
 
 var _ protocol.Protocol = (*ProtocolVersion0)(nil)
@@ -68,7 +68,7 @@ type ProtocolVersion0 struct {
 
 func NewProtocolVersion0(cdc *codec.Codec) *ProtocolVersion0 {
 	base := protocol.ProtocolBase{
-		Definition: common.ProtocolDefinition{
+		Definition: sdk.ProtocolDefinition{
 			uint64(0),
 			"",
 			uint64(1),
@@ -97,7 +97,7 @@ func (p *ProtocolVersion0) Init() {
 
 }
 
-func (p *ProtocolVersion0) GetDefinition() common.ProtocolDefinition {
+func (p *ProtocolVersion0) GetDefinition() sdk.ProtocolDefinition {
 	return p.pb.GetDefinition()
 }
 
@@ -233,6 +233,7 @@ func (p *ProtocolVersion0) configParams() {
 			govparams.DepositProcedureParameter.GetStoreKey(), govparams.DepositProcedure{},
 			govparams.VotingProcedureParameter.GetStoreKey(), govparams.VotingProcedure{},
 			govparams.TallyingProcedureParameter.GetStoreKey(), govparams.TallyingProcedure{},
+			upgradeparams.UpgradeParameter.GetStoreKey(), upgradeparams.Params{},
 			serviceparams.MaxRequestTimeoutParameter.GetStoreKey(), int64(0),
 			serviceparams.MinDepositMultipleParameter.GetStoreKey(), int64(0),
 			arbitrationparams.ComplaintRetrospectParameter.GetStoreKey(), time.Duration(0),
@@ -241,15 +242,14 @@ func (p *ProtocolVersion0) configParams() {
 		&govparams.DepositProcedureParameter,
 		&govparams.VotingProcedureParameter,
 		&govparams.TallyingProcedureParameter,
+		&upgradeparams.UpgradeParameter,
 		&serviceparams.MaxRequestTimeoutParameter,
 		&serviceparams.MinDepositMultipleParameter,
 		&arbitrationparams.ComplaintRetrospectParameter,
 		&arbitrationparams.ArbitrationTimelimitParameter)
 
 	params.RegisterGovParamMapping(
-		&govparams.DepositProcedureParameter,
-		&govparams.VotingProcedureParameter,
-		&govparams.TallyingProcedureParameter,
+		&upgradeparams.UpgradeParameter,
 		&serviceparams.MaxRequestTimeoutParameter,
 		&serviceparams.MinDepositMultipleParameter)
 }
@@ -320,7 +320,7 @@ func (p *ProtocolVersion0) InitChainer(ctx sdk.Context, DeliverTx sdk.DeliverTx,
 
 	feeTokenGensisConfig := auth.FeeGenesisStateConfig{
 		FeeTokenNative:    IrisCt.MinUnit.Denom,
-		GasPriceThreshold: 20000000000, // 20(glue), 20*10^9, 1 glue = 10^9 lue/gas, 1 iris = 10^18 lue
+		GasPriceThreshold: 20000000000, // 20*10^9 iris-atto per gas, 20 iris-nano per gas, 2*10^(-8) iris per gas
 	}
 
 	// load the address to pubkey map

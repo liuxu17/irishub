@@ -15,21 +15,21 @@ Bech32PrefixValPub := $(shell if [ -z ${Bech32PrefixValPub} ]; then echo "fvp"; 
 Bech32PrefixConsAddr := $(shell if [ -z ${Bech32PrefixConsAddr} ]; then echo "fca"; else echo ${Bech32PrefixConsAddr}; fi)
 Bech32PrefixConsPub := $(shell if [ -z ${Bech32PrefixConsPub} ]; then echo "fcp"; else echo ${Bech32PrefixConsPub}; fi)
 BUILD_FLAGS = -ldflags "\
--X github.com/irisnet/irishub/server/init.Bech32PrefixAccAddr=${Bech32PrefixAccAddr} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixAccPub=${Bech32PrefixAccPub} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixValAddr=${Bech32PrefixValAddr} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixValPub=${Bech32PrefixValPub} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixConsAddr=${Bech32PrefixConsAddr} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixConsPub=${Bech32PrefixConsPub}"
+-X github.com/irisnet/irishub/types.Bech32PrefixAccAddr=${Bech32PrefixAccAddr} \
+-X github.com/irisnet/irishub/types.Bech32PrefixAccPub=${Bech32PrefixAccPub} \
+-X github.com/irisnet/irishub/types.Bech32PrefixValAddr=${Bech32PrefixValAddr} \
+-X github.com/irisnet/irishub/types.Bech32PrefixValPub=${Bech32PrefixValPub} \
+-X github.com/irisnet/irishub/types.Bech32PrefixConsAddr=${Bech32PrefixConsAddr} \
+-X github.com/irisnet/irishub/types.Bech32PrefixConsPub=${Bech32PrefixConsPub}"
 
 INSTALL_FLAGS = -ldflags "\
 -X github.com/irisnet/irishub/version.GitCommit=${COMMIT_HASH} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixAccAddr=${Bech32PrefixAccAddr} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixAccPub=${Bech32PrefixAccPub} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixValAddr=${Bech32PrefixValAddr} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixValPub=${Bech32PrefixValPub} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixConsAddr=${Bech32PrefixConsAddr} \
--X github.com/irisnet/irishub/server/init.Bech32PrefixConsPub=${Bech32PrefixConsPub}"
+-X github.com/irisnet/irishub/types.Bech32PrefixAccAddr=${Bech32PrefixAccAddr} \
+-X github.com/irisnet/irishub/types.Bech32PrefixAccPub=${Bech32PrefixAccPub} \
+-X github.com/irisnet/irishub/types.Bech32PrefixValAddr=${Bech32PrefixValAddr} \
+-X github.com/irisnet/irishub/types.Bech32PrefixValPub=${Bech32PrefixValPub} \
+-X github.com/irisnet/irishub/types.Bech32PrefixConsAddr=${Bech32PrefixConsAddr} \
+-X github.com/irisnet/irishub/types.Bech32PrefixConsPub=${Bech32PrefixConsPub}"
 
 ########################################
 ### Tools & dependencies
@@ -111,10 +111,7 @@ test_unit:
 	@go test $(PACKAGES_STORE)
 
 test_cli:
-	@go test  -timeout 20m -count 1 -p 1 tests/cli/utils.go tests/cli/bank_test.go tests/cli/distribution_test.go tests/cli/gov_test.go tests/cli/iparam_test.go tests/cli/irismon_test.go tests/cli/record_test.go tests/cli/service_test.go tests/cli/stake_test.go
-
-test_upgrade_cli:
-	@go test  -timeout 20m -count 1 -p 1 tests/cli/utils.go tests/cli/bank_test.go
+	@go test  -timeout 20m -count 1 -p 4 tests/cli/*
 
 test_lcd:
 	@go test `go list github.com/irisnet/irishub/client/lcd`

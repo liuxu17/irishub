@@ -4,11 +4,12 @@ import (
 	"fmt"
 
 	"encoding/json"
+	"strconv"
+
 	"github.com/irisnet/irishub/modules/gov/tags"
 	sdk "github.com/irisnet/irishub/types"
 	govtypes "github.com/irisnet/irishub/types/gov"
 	tmstate "github.com/tendermint/tendermint/state"
-	"strconv"
 )
 
 // Handle all "gov" type messages.
@@ -234,12 +235,13 @@ func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 		keeper.cdc.MustUnmarshalBinaryLengthPrefixed(inactiveIterator.Value(), &proposalID)
 		inactiveProposal := keeper.GetProposal(ctx, proposalID)
 		keeper.SubProposalNum(ctx, inactiveProposal)
+		keeper.RefundDepositsWithoutFee(ctx, proposalID)
 		keeper.DeleteProposal(ctx, proposalID)
-		keeper.RefundDeposits(ctx, proposalID)
 
 		resTags = resTags.AppendTag(tags.Action, tags.ActionProposalDropped)
 		resTags = resTags.AppendTag(tags.ProposalID, []byte(string(proposalID)))
 
+		keeper.RemoveFromInactiveProposalQueue(ctx, inactiveProposal.GetDepositEndTime(), inactiveProposal.GetProposalID())
 		logger.Info(
 			fmt.Sprintf("proposal %d (%s) didn't meet minimum deposit of %s (had only %s); deleted",
 				inactiveProposal.GetProposalID(),
@@ -249,7 +251,6 @@ func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 			),
 		)
 	}
-
 
 	activeIterator := keeper.ActiveProposalQueueIterator(ctx, ctx.BlockHeader().Time)
 	defer activeIterator.Close()
@@ -291,44 +292,10 @@ func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 						val.GetConsAddr(),
 						ctx.BlockHeight(),
 						val.GetPower().RoundInt64(),
-						GetTallyingProcedure(ctx).GovernancePenalty)
+						GetTallyingCondition(ctx, activeProposal).Penalty)
 				}
 			}
 		}
-
-		keeper.SubProposalNum(ctx, activeProposal)
-		keeper.DeleteValidatorSet(ctx, activeProposal.GetProposalID())
-	}
-
-
-	if proposalID, ok := keeper.GetCriticalProposalID(ctx); ok {
-		activeProposal := keeper.GetProposal(ctx, proposalID)
-		result, tallyResults, _ := tally(ctx, keeper, activeProposal)
-
-		var action []byte
-		if result == PASS {
-			keeper.RefundDeposits(ctx, activeProposal.GetProposalID())
-			activeProposal.SetStatus(govtypes.StatusPassed)
-			action = tags.ActionProposalPassed
-			Execute(ctx, keeper, activeProposal)
-		} else if result == REJECTVETO {
-			keeper.DeleteDeposits(ctx, activeProposal.GetProposalID())
-			activeProposal.SetStatus(govtypes.StatusRejected)
-			action = tags.ActionProposalRejected
-		} else {
-			return resTags
-		}
-		keeper.RemoveFromActiveProposalQueue(ctx, activeProposal.GetVotingEndTime(), activeProposal.GetProposalID())
-
-		activeProposal.SetTallyResult(tallyResults)
-		activeProposal.SetVotingEndTime(ctx.BlockHeader().Time)
-		keeper.SetProposal(ctx, activeProposal)
-
-		logger.Info(fmt.Sprintf("proposal %d (%s) tallied; result: %v",
-			activeProposal.GetProposalID(), activeProposal.GetTitle(), result))
-
-		resTags = resTags.AppendTag(tags.Action, action)
-		resTags = resTags.AppendTag(tags.ProposalID, []byte(string(proposalID)))
 
 		keeper.SubProposalNum(ctx, activeProposal)
 		keeper.DeleteValidatorSet(ctx, activeProposal.GetProposalID())
