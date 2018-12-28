@@ -10,7 +10,7 @@ import (
 	"github.com/irisnet/irishub/modules/arbitration/params"
 	"github.com/irisnet/irishub/modules/auth"
 	"github.com/irisnet/irishub/modules/bank"
-	"github.com/irisnet/irishub/types/gov/params"
+	 "github.com/irisnet/irishub/modules/gov/params"
 	"github.com/irisnet/irishub/modules/params"
 	"github.com/irisnet/irishub/modules/service/params"
 	stakeTypes "github.com/irisnet/irishub/modules/stake/types"
@@ -137,16 +137,14 @@ func NewApp() *App {
 			govparams.DepositProcedureParameter.GetStoreKey(), govparams.DepositProcedure{},
 			govparams.VotingProcedureParameter.GetStoreKey(), govparams.VotingProcedure{},
 			govparams.TallyingProcedureParameter.GetStoreKey(), govparams.TallyingProcedure{},
-			serviceparams.MaxRequestTimeoutParameter.GetStoreKey(), int64(0),
-			serviceparams.MinDepositMultipleParameter.GetStoreKey(), int64(0),
+			serviceparams.ServiceParameter.GetStoreKey(), serviceparams.Params{},
 			arbitrationparams.ComplaintRetrospectParameter.GetStoreKey(), []byte{},
 			arbitrationparams.ArbitrationTimelimitParameter.GetStoreKey(), []byte{},
 		)),
 		&govparams.DepositProcedureParameter,
 		&govparams.VotingProcedureParameter,
 		&govparams.TallyingProcedureParameter,
-		&serviceparams.MaxRequestTimeoutParameter,
-		&serviceparams.MinDepositMultipleParameter,
+		&serviceparams.ServiceParameter,
 		&arbitrationparams.ComplaintRetrospectParameter,
 		&arbitrationparams.ArbitrationTimelimitParameter)
 
@@ -199,7 +197,7 @@ func (app *App) InitChainer(ctx sdk.Context, _ abci.RequestInitChain) abci.Respo
 		GasPriceThreshold: 0, // for mock test
 	}
 
-	auth.InitGenesis(ctx, app.FeeCollectionKeeper, auth.DefaultGenesisState(), app.FeeManager, feeTokenGensisConfig)
+	auth.InitGenesis(ctx, app.FeeCollectionKeeper, app.AccountKeeper, auth.DefaultGenesisState(), app.FeeManager, feeTokenGensisConfig)
 
 	return abci.ResponseInitChain{}
 }
