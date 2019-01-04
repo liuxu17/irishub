@@ -46,7 +46,7 @@ func handleMsgSubmitProposal(ctx sdk.Context, keeper Keeper, msg MsgSubmitPropos
 			return ErrNotProfiler(keeper.codespace, msg.Proposer).Result()
 		}
 	}
-	proposal := keeper.NewProposal(ctx, msg.Title, msg.Description, msg.ProposalType, msg.Param)
+	proposal := keeper.NewProposal(ctx, msg.Title, msg.Description, msg.ProposalType, msg.Params)
 
 	////////////////////  iris end  /////////////////////////////
 
@@ -59,7 +59,7 @@ func handleMsgSubmitProposal(ctx sdk.Context, keeper Keeper, msg MsgSubmitPropos
 
 	var paramBytes []byte
 	if msg.ProposalType == ProposalTypeParameterChange {
-		paramBytes, _ = json.Marshal(proposal.(*ParameterProposal).Param)
+		paramBytes, _ = json.Marshal(proposal.(*ParameterProposal).Params)
 	}
 	////////////////////  iris end  /////////////////////////////
 	resTags := sdk.NewTags(
@@ -246,7 +246,7 @@ func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 			fmt.Sprintf("proposal %d (%s) didn't meet minimum deposit of %s (had only %s); deleted",
 				inactiveProposal.GetProposalID(),
 				inactiveProposal.GetTitle(),
-				GetMinDeposit(ctx, inactiveProposal),
+				keeper.GetDepositProcedure(ctx, inactiveProposal).MinDeposit,
 				inactiveProposal.GetTotalDeposit(),
 			),
 		)
@@ -292,7 +292,7 @@ func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 						val.GetConsAddr(),
 						ctx.BlockHeight(),
 						val.GetPower().RoundInt64(),
-						GetTallyingCondition(ctx, activeProposal).Penalty)
+						keeper.GetTallyingProcedure(ctx, activeProposal).Penalty)
 				}
 			}
 		}

@@ -3,13 +3,9 @@ package v0
 import (
 	"fmt"
 	"sort"
-	"time"
-
 	"github.com/irisnet/irishub/app/protocol"
 	protocolKeeper "github.com/irisnet/irishub/app/protocol/keeper"
 	"github.com/irisnet/irishub/codec"
-	"github.com/irisnet/irishub/modules/arbitration"
-	"github.com/irisnet/irishub/modules/arbitration/params"
 	"github.com/irisnet/irishub/modules/auth"
 	"github.com/irisnet/irishub/modules/bank"
 	distr "github.com/irisnet/irishub/modules/distribution"
@@ -17,18 +13,16 @@ import (
 	"github.com/irisnet/irishub/modules/guardian"
 	"github.com/irisnet/irishub/modules/mint"
 	"github.com/irisnet/irishub/modules/params"
-	"github.com/irisnet/irishub/modules/record"
 	"github.com/irisnet/irishub/modules/service"
-	"github.com/irisnet/irishub/modules/service/params"
 	"github.com/irisnet/irishub/modules/slashing"
 	"github.com/irisnet/irishub/modules/stake"
 	"github.com/irisnet/irishub/modules/upgrade"
 	"github.com/irisnet/irishub/modules/upgrade/params"
 	sdk "github.com/irisnet/irishub/types"
 
-	 "github.com/irisnet/irishub/modules/gov/params"
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/libs/log"
+	"strings"
 )
 
 var _ protocol.Protocol = (*ProtocolVersion0)(nil)
@@ -40,21 +34,18 @@ type ProtocolVersion0 struct {
 	invariantLevel string
 
 	// Manage getting and setting accounts
-	accountMapper       auth.AccountKeeper
-	feeCollectionKeeper auth.FeeCollectionKeeper
-	bankKeeper          bank.Keeper
-	StakeKeeper         stake.Keeper
-	slashingKeeper      slashing.Keeper
-	mintKeeper          mint.Keeper
-	distrKeeper         distr.Keeper
-	govKeeper           gov.Keeper
-	paramsKeeper        params.Keeper
-	serviceKeeper       service.Keeper
-	guardianKeeper      guardian.Keeper
-	recordKeeper        record.Keeper
-	upgradeKeeper       upgrade.Keeper
-	// fee manager
-	feeManager auth.FeeManager
+	accountMapper  auth.AccountKeeper
+	feeKeeper      auth.FeeKeeper
+	bankKeeper     bank.Keeper
+	StakeKeeper    stake.Keeper
+	slashingKeeper slashing.Keeper
+	mintKeeper     mint.Keeper
+	distrKeeper    distr.Keeper
+	govKeeper      gov.Keeper
+	paramsKeeper   params.Keeper
+	serviceKeeper  service.Keeper
+	guardianKeeper guardian.Keeper
+	upgradeKeeper  upgrade.Keeper
 
 	router      protocol.Router      // handle any kind of message
 	queryRouter protocol.QueryRouter // router for redirecting query calls
@@ -67,7 +58,6 @@ type ProtocolVersion0 struct {
 	initChainer  sdk.InitChainer1 // initialize state with validators and state blob
 	beginBlocker sdk.BeginBlocker // logic to run before any txs
 	endBlocker   sdk.EndBlocker   // logic to run after all txs, and to determine valset changes
-
 }
 
 func NewProtocolVersion0(cdc *codec.Codec, log log.Logger, invariantLevel string) *ProtocolVersion0 {
@@ -83,7 +73,7 @@ func NewProtocolVersion0(cdc *codec.Codec, log log.Logger, invariantLevel string
 		pb:             &base,
 		cdc:            cdc,
 		logger:         log,
-		invariantLevel: invariantLevel,
+		invariantLevel: strings.ToLower(strings.TrimSpace(invariantLevel)),
 		router:         protocol.NewRouter(),
 		queryRouter:    protocol.NewQueryRouter(),
 	}
@@ -123,13 +113,13 @@ func (p *ProtocolVersion0) configKeepers(protocolkeeper protocolKeeper.Keeper) {
 		guardian.DefaultCodespace,
 	)
 	p.bankKeeper = bank.NewBaseKeeper(p.accountMapper)
-	p.feeCollectionKeeper = auth.NewFeeCollectionKeeper(
-		p.cdc,
-		protocol.KeyFeeCollection,
-	)
 	p.paramsKeeper = params.NewKeeper(
 		p.cdc,
 		protocol.KeyParams, protocol.TkeyParams,
+	)
+	p.feeKeeper = auth.NewFeeKeeper(
+		p.cdc,
+		protocol.KeyFee, p.paramsKeeper.Subspace(auth.DefaultParamSpace),
 	)
 	stakeKeeper := stake.NewKeeper(
 		p.cdc,
@@ -138,14 +128,14 @@ func (p *ProtocolVersion0) configKeepers(protocolkeeper protocolKeeper.Keeper) {
 		stake.DefaultCodespace,
 	)
 	p.mintKeeper = mint.NewKeeper(p.cdc, protocol.KeyMint,
-		p.paramsKeeper.Subspace(mint.DefaultParamspace),
-		p.bankKeeper, p.feeCollectionKeeper,
+		p.paramsKeeper.Subspace(mint.DefaultParamSpace),
+		p.bankKeeper, p.feeKeeper,
 	)
 	p.distrKeeper = distr.NewKeeper(
 		p.cdc,
 		protocol.KeyDistr,
 		p.paramsKeeper.Subspace(distr.DefaultParamspace),
-		p.bankKeeper, &stakeKeeper, p.feeCollectionKeeper,
+		p.bankKeeper, &stakeKeeper, p.feeKeeper,
 		distr.DefaultCodespace,
 	)
 	p.slashingKeeper = slashing.NewKeeper(
@@ -158,25 +148,23 @@ func (p *ProtocolVersion0) configKeepers(protocolkeeper protocolKeeper.Keeper) {
 	p.govKeeper = gov.NewKeeper(
 		p.cdc,
 		protocol.KeyGov,
+		p.paramsKeeper,
+		p.paramsKeeper.Subspace(gov.DefaultParamSpace),
 		p.distrKeeper,
 		p.bankKeeper,
 		p.guardianKeeper,
 		&stakeKeeper,
 		protocolkeeper,
-		 gov.DefaultCodespace,
+		gov.DefaultCodespace,
 	)
 
-	p.recordKeeper = record.NewKeeper(
-		p.cdc,
-		protocol.KeyRecord,
-		record.DefaultCodespace,
-	)
 	p.serviceKeeper = service.NewKeeper(
 		p.cdc,
 		protocol.KeyService,
 		p.bankKeeper,
 		p.guardianKeeper,
 		service.DefaultCodespace,
+		p.paramsKeeper.Subspace(service.DefaultParamSpace),
 	)
 
 	// register the staking hooks
@@ -184,7 +172,6 @@ func (p *ProtocolVersion0) configKeepers(protocolkeeper protocolKeeper.Keeper) {
 	// so that it can be modified like below:
 	p.StakeKeeper = *stakeKeeper.SetHooks(
 		NewHooks(p.distrKeeper.Hooks(), p.slashingKeeper.Hooks()))
-	p.feeManager = auth.NewFeeManager(p.paramsKeeper.Subspace("Fee"))
 
 	p.upgradeKeeper = upgrade.NewKeeper(p.cdc, protocol.KeyUpgrade, p.StakeKeeper, protocolkeeper)
 }
@@ -197,7 +184,6 @@ func (p *ProtocolVersion0) configRouters() {
 		AddRoute("slashing", slashing.NewHandler(p.slashingKeeper)).
 		AddRoute("distr", distr.NewHandler(p.distrKeeper)).
 		AddRoute("gov", gov.NewHandler(p.govKeeper)).
-		AddRoute("record", record.NewHandler(p.recordKeeper)).
 		AddRoute("service", service.NewHandler(p.serviceKeeper)).
 		AddRoute("guardian", guardian.NewHandler(p.guardianKeeper))
 	p.queryRouter.
@@ -207,54 +193,40 @@ func (p *ProtocolVersion0) configRouters() {
 
 // configure all Stores
 func (p *ProtocolVersion0) configFeeHandlers() {
-	p.anteHandler = auth.NewAnteHandler(p.accountMapper, p.feeCollectionKeeper)
-	p.feeRefundHandler = auth.NewFeeRefundHandler(p.accountMapper, p.feeCollectionKeeper, p.feeManager)
-	p.feePreprocessHandler = auth.NewFeePreprocessHandler(p.feeManager)
+	p.anteHandler = auth.NewAnteHandler(p.accountMapper, p.feeKeeper)
+	p.feeRefundHandler = auth.NewFeeRefundHandler(p.accountMapper, p.feeKeeper)
+	p.feePreprocessHandler = auth.NewFeePreprocessHandler(p.feeKeeper)
 }
 
 // configure all Stores
-func (p *ProtocolVersion0) GetKVStoreKeyList()  []*sdk.KVStoreKey {
-   return []*sdk.KVStoreKey{
-	   protocol.KeyMain,
-	   protocol.KeyProtocol,
-	   protocol.KeyAccount,
-	   protocol.KeyStake,
-	   protocol.KeyMint,
-	   protocol.KeyDistr,
-	   protocol.KeySlashing,
-	   protocol.KeyGov,
-	   protocol.KeyRecord,
-	   protocol.KeyFeeCollection,
-	   protocol.KeyParams,
-	   protocol.KeyUpgrade,
-	   protocol.KeyService,
-	   protocol.KeyGuardian}
+func (p *ProtocolVersion0) GetKVStoreKeyList() []*sdk.KVStoreKey {
+	return []*sdk.KVStoreKey{
+		protocol.KeyMain,
+		protocol.KeyProtocol,
+		protocol.KeyAccount,
+		protocol.KeyStake,
+		protocol.KeyMint,
+		protocol.KeyDistr,
+		protocol.KeySlashing,
+		protocol.KeyGov,
+		protocol.KeyRecord,
+		protocol.KeyFee,
+		protocol.KeyParams,
+		protocol.KeyUpgrade,
+		protocol.KeyService,
+		protocol.KeyGuardian}
 }
 
 // configure all Stores
 func (p *ProtocolVersion0) configParams() {
 
+	params.RegisterParamSet(&mint.Params{}, &slashing.Params{}, &service.Params{}, &auth.Params{}, &stake.Params{}, &distr.Params{})
+
 	params.SetParamReadWriter(p.paramsKeeper.Subspace(params.GovParamspace).WithTypeTable(
 		params.NewTypeTable(
-			govparams.DepositProcedureParameter.GetStoreKey(), govparams.DepositProcedure{},
-			govparams.VotingProcedureParameter.GetStoreKey(), govparams.VotingProcedure{},
-			govparams.TallyingProcedureParameter.GetStoreKey(), govparams.TallyingProcedure{},
 			upgradeparams.UpgradeParameter.GetStoreKey(), upgradeparams.Params{},
-			serviceparams.ServiceParameter.GetStoreKey(), serviceparams.Params{},
-			arbitrationparams.ComplaintRetrospectParameter.GetStoreKey(), time.Duration(0),
-			arbitrationparams.ArbitrationTimelimitParameter.GetStoreKey(), time.Duration(0),
 		)),
-		&govparams.DepositProcedureParameter,
-		&govparams.VotingProcedureParameter,
-		&govparams.TallyingProcedureParameter,
-		&upgradeparams.UpgradeParameter,
-		&serviceparams.ServiceParameter,
-		&arbitrationparams.ComplaintRetrospectParameter,
-		&arbitrationparams.ArbitrationTimelimitParameter)
-
-	params.RegisterGovParamMapping(
-		&upgradeparams.UpgradeParameter,
-		&serviceparams.ServiceParameter)
+		&upgradeparams.UpgradeParameter, )
 }
 
 // application updates every end block
@@ -321,13 +293,8 @@ func (p *ProtocolVersion0) InitChainer(ctx sdk.Context, DeliverTx sdk.DeliverTx,
 	}
 	gov.InitGenesis(ctx, p.govKeeper, genesisState.GovData)
 
-	feeTokenGensisConfig := auth.FeeGenesisStateConfig{
-		FeeTokenNative:    IrisCt.MinUnit.Denom,
-		GasPriceThreshold: 20000000000, // 20*10^9 iris-atto per gas, 20 iris-nano per gas, 2*10^(-8) iris per gas
-	}
-
 	// load the address to pubkey map
-	auth.InitGenesis(ctx, p.feeCollectionKeeper, p.accountMapper, genesisState.AuthData, p.feeManager, feeTokenGensisConfig)
+	auth.InitGenesis(ctx, p.feeKeeper, p.accountMapper, genesisState.AuthData)
 	slashing.InitGenesis(ctx, p.slashingKeeper, genesisState.SlashingData, genesisState.StakeData)
 	mint.InitGenesis(ctx, p.mintKeeper, genesisState.MintData)
 	distr.InitGenesis(ctx, p.distrKeeper, genesisState.DistrData)
@@ -369,7 +336,6 @@ func (p *ProtocolVersion0) InitChainer(ctx sdk.Context, DeliverTx sdk.DeliverTx,
 	}
 
 	service.InitGenesis(ctx, p.serviceKeeper, genesisState.ServiceData)
-	arbitration.InitGenesis(ctx, genesisState.ArbitrationData)
 	guardian.InitGenesis(ctx, p.guardianKeeper, genesisState.GuardianData)
 	upgrade.InitGenesis(ctx, p.upgradeKeeper, genesisState.UpgradeData)
 	return abci.ResponseInitChain{
