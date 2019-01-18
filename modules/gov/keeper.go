@@ -3,7 +3,6 @@ package gov
 import (
 	"time"
 
-	protocolKeeper "github.com/irisnet/irishub/app/protocol/keeper"
 	"github.com/irisnet/irishub/codec"
 	"github.com/irisnet/irishub/modules/bank"
 	"github.com/irisnet/irishub/modules/distribution"
@@ -19,55 +18,58 @@ import (
 var (
 	DepositedCoinsAccAddr = sdk.AccAddress(crypto.AddressHash([]byte("govDepositedCoins")))
 	BurnRate              = sdk.NewDecWithPrec(2, 1)
+	MinDepositRate        = sdk.NewDecWithPrec(3, 1)
 )
 
-// Governance Keeper
+// Governance ProtocolKeeper
 type Keeper struct {
-	// The reference to the Param Keeper to get and set Global Params
-	paramsKeeper params.Keeper
-	paramSpace   params.Subspace
-
-	// The reference to the CoinKeeper to modify balances
-	ck bank.Keeper
-
-	dk distribution.Keeper
-
-	gk guardian.Keeper
-	// The ValidatorSet to get information about validators
-	vs sdk.ValidatorSet
-
-	// The reference to the DelegationSet to get information about delegators
-	ds sdk.DelegationSet
-
-	pk protocolKeeper.Keeper
 	// The (unexposed) keys used to access the stores from the Context.
 	storeKey sdk.StoreKey
 
 	// The codec codec for binary encoding/decoding.
 	cdc *codec.Codec
 
+	// The reference to the Param ProtocolKeeper to get and set Global Params
+	paramSpace   params.Subspace
+	paramsKeeper params.Keeper
+
+	protocolKeeper sdk.ProtocolKeeper
+
+	// The reference to the CoinKeeper to modify balances
+	ck bank.Keeper
+
+	dk distribution.Keeper
+
+	guardianKeeper guardian.Keeper
+
+	// The ValidatorSet to get information about validators
+	vs sdk.ValidatorSet
+
+	// The reference to the DelegationSet to get information about delegators
+	ds sdk.DelegationSet
+
 	// Reserved codespace
 	codespace sdk.CodespaceType
 }
 
-// NewKeeper returns a governance keeper. It handles:
+// NewProtocolKeeper returns a governance keeper. It handles:
 // - submitting governance proposals
 // - depositing funds into proposals, and activating upon sufficient funds being deposited
 // - users voting on proposals, with weight proportional to stake in the system
 // - and tallying the result of the vote.
-func NewKeeper(cdc *codec.Codec, key sdk.StoreKey, paramsKeeper params.Keeper, paramSpace params.Subspace, dk distribution.Keeper, ck bank.Keeper, gk guardian.Keeper, ds sdk.DelegationSet, pk protocolKeeper.Keeper, codespace sdk.CodespaceType) Keeper {
+func NewKeeper(key sdk.StoreKey, cdc *codec.Codec, paramSpace params.Subspace, paramsKeeper params.Keeper, protocolKeeper sdk.ProtocolKeeper, ck bank.Keeper, dk distribution.Keeper, guardianKeeper guardian.Keeper, ds sdk.DelegationSet, codespace sdk.CodespaceType) Keeper {
 	return Keeper{
-		storeKey:     key,
-		paramsKeeper: paramsKeeper,
-		paramSpace:   paramSpace.WithTypeTable(ParamTypeTable()),
-		ck:           ck,
-		dk:           dk,
-		gk:           gk,
-		ds:           ds,
-		vs:           ds.GetValidatorSet(),
-		pk:           pk,
-		cdc:          cdc,
-		codespace:    codespace,
+		key,
+		cdc,
+		paramSpace.WithTypeTable(ParamTypeTable()),
+		paramsKeeper,
+		protocolKeeper,
+		ck,
+		dk,
+		guardianKeeper,
+		ds.GetValidatorSet(),
+		ds,
+		codespace,
 	}
 }
 
@@ -163,9 +165,10 @@ func (keeper Keeper) NewUsageProposal(ctx sdk.Context, msg MsgSubmitTxTaxUsagePr
 	}
 	var proposal Proposal = &TaxUsageProposal{
 		textProposal,
-		msg.Usage,
-		msg.DestAddress,
-		msg.Percent,
+		TaxUsage{
+			msg.Usage,
+			msg.DestAddress,
+			msg.Percent},
 	}
 	keeper.saveProposal(ctx, proposal)
 	return proposal
@@ -188,9 +191,11 @@ func (keeper Keeper) NewSoftwareUpgradeProposal(ctx sdk.Context, msg MsgSubmitSo
 	}
 	var proposal Proposal = &SoftwareUpgradeProposal{
 		textProposal,
-		msg.Version,
-		msg.Software,
-		msg.SwitchHeight,
+		sdk.ProtocolDefinition{
+			msg.Version,
+			msg.Software,
+			msg.SwitchHeight,
+			msg.Threshold},
 	}
 	keeper.saveProposal(ctx, proposal)
 	return proposal
@@ -202,8 +207,6 @@ func (keeper Keeper) saveProposal(ctx sdk.Context, proposal Proposal) {
 	keeper.SetProposal(ctx, proposal)
 	keeper.InsertInactiveProposalQueue(ctx, proposal.GetDepositEndTime(), proposal.GetProposalID())
 }
-
-////////////////////  iris end  /////////////////////////////
 
 // Get Proposal from store by ProposalID
 func (keeper Keeper) GetProposal(ctx sdk.Context, proposalID uint64) Proposal {
@@ -423,6 +426,17 @@ func (keeper Keeper) setDeposit(ctx sdk.Context, proposalID uint64, depositorAdd
 	store.Set(KeyDeposit(proposalID, depositorAddr), bz)
 }
 
+func (keeper Keeper) AddInitialDeposit(ctx sdk.Context, proposal Proposal, depositorAddr sdk.AccAddress, initialDeposit sdk.Coins) (sdk.Error, bool) {
+
+	minDepositInt := sdk.NewDecFromInt(keeper.GetDepositProcedure(ctx, proposal).MinDeposit.AmountOf(stakeTypes.StakeDenom)).Mul(MinDepositRate).RoundInt()
+	minInitialDeposit := sdk.Coins{sdk.NewCoin(stakeTypes.StakeDenom, minDepositInt)}
+	if !initialDeposit.IsAllGTE(minInitialDeposit) {
+		return ErrNotEnoughInitialDeposit(DefaultCodespace, initialDeposit, minInitialDeposit), false
+	}
+
+	return keeper.AddDeposit(ctx, proposal.GetProposalID(), depositorAddr, initialDeposit)
+}
+
 // Adds or updates a deposit of a specific depositor on a specific proposal
 // Activates voting period when appropriate
 func (keeper Keeper) AddDeposit(ctx sdk.Context, proposalID uint64, depositorAddr sdk.AccAddress, depositAmount sdk.Coins) (sdk.Error, bool) {
@@ -611,8 +625,6 @@ func (keeper Keeper) SetSystemHaltHeight(ctx sdk.Context, height int64) {
 	store.Set(KeySystemHaltHeight, bz)
 }
 
-
-
 func (keeper Keeper) GetCriticalProposalID(ctx sdk.Context) (uint64, bool) {
 	store := ctx.KVStore(keeper.storeKey)
 	bz := store.Get(KeyCriticalProposal)
@@ -698,15 +710,15 @@ func (keeper Keeper) SubNormalProposalNum(ctx sdk.Context) {
 	keeper.SetNormalProposalNum(ctx, keeper.GetNormalProposalNum(ctx)-1)
 }
 
-func (keeper Keeper) IsMoreThanMaxProposal(ctx sdk.Context, pl ProposalLevel) (uint64, bool) {
-	votingProcedure := keeper.GetVotingProcedureByProposalLevel(ctx, pl)
+func (keeper Keeper) HasReachedTheMaxProposalNum(ctx sdk.Context, pl ProposalLevel) (uint64, bool) {
+	maxNum := keeper.GetMaxNumByProposalLevel(ctx, pl)
 	switch pl {
 	case ProposalLevelCritical:
-		return keeper.GetCriticalProposalNum(ctx), keeper.GetCriticalProposalNum(ctx) >= votingProcedure.MaxNum
+		return keeper.GetCriticalProposalNum(ctx), keeper.GetCriticalProposalNum(ctx) == maxNum
 	case ProposalLevelImportant:
-		return keeper.GetImportantProposalNum(ctx), keeper.GetImportantProposalNum(ctx) >= votingProcedure.MaxNum
+		return keeper.GetImportantProposalNum(ctx), keeper.GetImportantProposalNum(ctx) == maxNum
 	case ProposalLevelNormal:
-		return keeper.GetNormalProposalNum(ctx), keeper.GetNormalProposalNum(ctx) >= votingProcedure.MaxNum
+		return keeper.GetNormalProposalNum(ctx), keeper.GetNormalProposalNum(ctx) == maxNum
 	default:
 		panic("There is no level for this proposal")
 	}

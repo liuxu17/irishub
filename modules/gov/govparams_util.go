@@ -2,7 +2,6 @@ package gov
 
 import (
 	sdk "github.com/irisnet/irishub/types"
-
 )
 
 //-----------------------------------------------------------
@@ -59,25 +58,23 @@ func (Keeper Keeper) GetDepositProcedure(ctx sdk.Context, p Proposal) DepositPro
 	switch GetProposalLevel(p) {
 	case ProposalLevelCritical:
 		return DepositProcedure{
-			MinDeposit:params.CriticalMinDeposit,
-			MaxDepositPeriod:params.CriticalDepositPeriod,
+			MinDeposit:       params.CriticalMinDeposit,
+			MaxDepositPeriod: params.CriticalDepositPeriod,
 		}
 	case ProposalLevelImportant:
 		return DepositProcedure{
-			MinDeposit:params.ImportantMinDeposit,
-			MaxDepositPeriod:params.ImportantDepositPeriod,
+			MinDeposit:       params.ImportantMinDeposit,
+			MaxDepositPeriod: params.ImportantDepositPeriod,
 		}
 	case ProposalLevelNormal:
 		return DepositProcedure{
-		MinDeposit:params.NormalMinDeposit,
-		MaxDepositPeriod:params.NormalDepositPeriod,
-	}
+			MinDeposit:       params.NormalMinDeposit,
+			MaxDepositPeriod: params.NormalDepositPeriod,
+		}
 	default:
 		panic("There is no level for this proposal which type is " + p.GetProposalType().String())
 	}
 }
-
-
 
 // Returns the current Voting Procedure from the global param store
 func (Keeper Keeper) GetVotingProcedure(ctx sdk.Context, p Proposal) VotingProcedure {
@@ -85,43 +82,32 @@ func (Keeper Keeper) GetVotingProcedure(ctx sdk.Context, p Proposal) VotingProce
 	switch GetProposalLevel(p) {
 	case ProposalLevelCritical:
 		return VotingProcedure{
-			VotingPeriod:params.CriticalVotingPeriod,
-			MaxNum:params.CriticalMaxNum,
+			VotingPeriod: params.CriticalVotingPeriod,
 		}
 	case ProposalLevelImportant:
 		return VotingProcedure{
-			VotingPeriod:params.ImportantVotingPeriod,
-			MaxNum:params.ImportantMaxNum,
+			VotingPeriod: params.ImportantVotingPeriod,
 		}
 	case ProposalLevelNormal:
 		return VotingProcedure{
-			VotingPeriod:params.NormalVotingPeriod,
-			MaxNum:params.NormalMaxNum,
+			VotingPeriod: params.NormalVotingPeriod,
 		}
 	default:
 		panic("There is no level for this proposal which type is " + p.GetProposalType().String())
 	}
 }
 
-// Returns the current Voting Procedure from the global param store
-func (Keeper Keeper) GetVotingProcedureByProposalLevel(ctx sdk.Context, pl ProposalLevel) VotingProcedure {
+func (Keeper Keeper) GetMaxNumByProposalLevel(ctx sdk.Context, pl ProposalLevel) uint64 {
 	params := Keeper.GetParamSet(ctx)
 	switch pl {
 	case ProposalLevelCritical:
-		return VotingProcedure{
-			VotingPeriod:params.CriticalVotingPeriod,
-			MaxNum:params.CriticalMaxNum,
-		}
+		return params.CriticalMaxNum
+
 	case ProposalLevelImportant:
-		return VotingProcedure{
-			VotingPeriod:params.ImportantVotingPeriod,
-			MaxNum:params.ImportantMaxNum,
-		}
+		return params.ImportantMaxNum
+
 	case ProposalLevelNormal:
-		return VotingProcedure{
-			VotingPeriod:params.NormalVotingPeriod,
-			MaxNum:params.NormalMaxNum,
-		}
+		return params.NormalMaxNum
 	default:
 		panic("There is no level for this proposal which type is " + pl.string())
 	}
@@ -133,31 +119,31 @@ func (Keeper Keeper) GetTallyingProcedure(ctx sdk.Context, p Proposal) TallyingP
 	switch GetProposalLevel(p) {
 	case ProposalLevelCritical:
 		return TallyingProcedure{
-			Threshold:params.CriticalThreshold,
-			Veto:params.CriticalVeto,
-			Participation:params.CriticalParticipation,
-			Penalty:params.CriticalPenalty,
+			Threshold:     params.CriticalThreshold,
+			Veto:          params.CriticalVeto,
+			Participation: params.CriticalParticipation,
+			Penalty:       params.CriticalPenalty,
 		}
 	case ProposalLevelImportant:
 		return TallyingProcedure{
-			Threshold:params.ImportantThreshold,
-			Veto:params.ImportantVeto,
-			Participation:params.ImportantParticipation,
-			Penalty:params.ImportantPenalty,
+			Threshold:     params.ImportantThreshold,
+			Veto:          params.ImportantVeto,
+			Participation: params.ImportantParticipation,
+			Penalty:       params.ImportantPenalty,
 		}
 	case ProposalLevelNormal:
 		return TallyingProcedure{
-			Threshold:params.NormalThreshold,
-			Veto:params.NormalVeto,
-			Participation:params.NormalParticipation,
-			Penalty:params.NormalPenalty,
+			Threshold:     params.NormalThreshold,
+			Veto:          params.NormalVeto,
+			Participation: params.NormalParticipation,
+			Penalty:       params.NormalPenalty,
 		}
 	default:
 		panic("There is no level for this proposal which type is " + p.GetProposalType().String())
 	}
 }
 
-func (keeper Keeper) GetSystemHaltPeriod(ctx sdk.Context) ( SystemHaltPeriod int64) {
-	keeper.paramSpace.Get(ctx,KeySystemHaltPeriod,SystemHaltPeriod)
+func (keeper Keeper) GetSystemHaltPeriod(ctx sdk.Context) (SystemHaltPeriod int64) {
+	keeper.paramSpace.Get(ctx, KeySystemHaltPeriod, &SystemHaltPeriod)
 	return
 }

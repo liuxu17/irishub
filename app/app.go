@@ -9,18 +9,9 @@ import (
 	"strings"
 
 	"github.com/irisnet/irishub/app/protocol"
-	protocolKeeper "github.com/irisnet/irishub/app/protocol/keeper"
 	"github.com/irisnet/irishub/app/v0"
 	"github.com/irisnet/irishub/codec"
 	"github.com/irisnet/irishub/modules/auth"
-	"github.com/irisnet/irishub/modules/bank"
-	distr "github.com/irisnet/irishub/modules/distribution"
-	"github.com/irisnet/irishub/modules/gov"
-	"github.com/irisnet/irishub/modules/guardian"
-	"github.com/irisnet/irishub/modules/service"
-	"github.com/irisnet/irishub/modules/slashing"
-	"github.com/irisnet/irishub/modules/stake"
-	"github.com/irisnet/irishub/modules/upgrade"
 	sdk "github.com/irisnet/irishub/types"
 
 	"github.com/spf13/viper"
@@ -29,12 +20,14 @@ import (
 	dbm "github.com/tendermint/tendermint/libs/db"
 	"github.com/tendermint/tendermint/libs/log"
 	tmtypes "github.com/tendermint/tendermint/types"
+	"github.com/irisnet/irishub/store"
 )
 
 const (
-	appName          = "IrisApp"
-	FlagReplayHeight = "replay_height"
-	DefaultSyncableHeight = 10000	// Multistore saves a snapshot every 10000 blocks
+	appName               = "IrisApp"
+	FlagReplay            = "replay-last-block"
+	DefaultSyncableHeight = store.NumStoreEvery // Multistore saves a snapshot every 10000 blocks
+	DefaultCacheSize      = store.NumRecent     // Multistore saves last 100 blocks
 )
 
 // default home directories for expected binaries
@@ -50,59 +43,70 @@ type IrisApp struct {
 }
 
 func NewIrisApp(logger log.Logger, db dbm.DB, traceStore io.Writer, baseAppOptions ...func(*BaseApp)) *IrisApp {
-	cdc := MakeCodec()
-
-	bApp := NewBaseApp(appName, logger, db, auth.DefaultTxDecoder(cdc), baseAppOptions...)
+	bApp := NewBaseApp(appName, logger, db, baseAppOptions...)
 	bApp.SetCommitMultiStoreTracer(traceStore)
 
 	// create your application object
-	var app = &IrisApp{
-		BaseApp: bApp,
-	}
+	var app = &IrisApp{BaseApp: bApp}
 
-	engine := protocol.NewProtocolEngine(cdc)
+	protocolKeeper := sdk.NewProtocolKeeper(protocol.KeyMain)
+	engine := protocol.NewProtocolEngine(protocolKeeper)
 	app.SetProtocolEngine(&engine)
 	app.MountStoresIAVL(engine.GetKVStoreKeys())
 	app.MountStoresTransient(engine.GetTransientStoreKeys())
 
 	var err error
-	if viper.GetInt64(FlagReplayHeight) > 0 {
-		replayHeight := viper.GetInt64(FlagReplayHeight)
-		loadHeight := app.replayToHeight(replayHeight, app.Logger)
-		app.Logger.Info(fmt.Sprintf("Load store at %d, start to replay to %d", loadHeight, replayHeight))
-		err = app.LoadVersion(loadHeight, protocol.KeyMain, true)
+	if viper.GetBool(FlagReplay) {
+		lastHeight := Replay(app.Logger)
+		err = app.LoadVersion(lastHeight, protocol.KeyMain, true)
 	} else {
-		err = app.LoadLatestVersion(engine.GetKeyMain())
-	}
+		err = app.LoadLatestVersion(protocol.KeyMain)
+	} // app is now sealed
 	if err != nil {
 		cmn.Exit(err.Error())
 	}
 
-	protocol0 := v0.NewProtocolVersion0(cdc, logger, sdk.InvariantLevel)
-	engine.Add(protocol0)
-	//	protocol1 := protocol.NewProtocolVersion1(cdc, logger, app.invariantLevel)
-	//	Engine.Add(&protocol1)
-	engine.LoadCurrentProtocol(app.GetKVStore(protocol.KeyProtocol))
+	engine.Add(v0.NewProtocolV0(0, logger, protocolKeeper, sdk.InvariantLevel))
+	// engine.Add(v1.NewProtocolV1(1, ...))
+	// engine.Add(v2.NewProtocolV1(2, ...))
+
+	loaded, current := engine.LoadCurrentProtocol(app.GetKVStore(protocol.KeyMain))
+	if !loaded {
+		cmn.Exit(fmt.Sprintf("Your software doesn't support the required protocol (version %d)!", current))
+	}
+	app.BaseApp.txDecoder = auth.DefaultTxDecoder(engine.GetCurrentProtocol().GetCodec())
 
 	return app
 }
 
-// custom tx codec
-func MakeCodec() *codec.Codec {
-	var cdc = codec.New()
-	bank.RegisterCodec(cdc)
-	stake.RegisterCodec(cdc)
-	distr.RegisterCodec(cdc)
-	slashing.RegisterCodec(cdc)
-	gov.RegisterCodec(cdc)
-	upgrade.RegisterCodec(cdc)
-	service.RegisterCodec(cdc)
-	guardian.RegisterCodec(cdc)
-	auth.RegisterCodec(cdc)
-	sdk.RegisterCodec(cdc)
-	codec.RegisterCrypto(cdc)
-	protocolKeeper.RegisterCodec(cdc)
+// latest version of codec
+func MakeLatestCodec() *codec.Codec {
+	var cdc = v0.MakeCodec() // replace with latest protocol version
 	return cdc
+}
+
+func (app *IrisApp) ExportOrReplay(replayHeight int64) (replay bool, height int64) {
+	lastBlockHeight := app.BaseApp.LastBlockHeight()
+	if replayHeight > lastBlockHeight {
+		replayHeight = lastBlockHeight
+	}
+
+	if lastBlockHeight-replayHeight <= DefaultCacheSize {
+		err := app.LoadVersion(replayHeight, protocol.KeyMain, false)
+		if err != nil {
+			cmn.Exit(err.Error())
+		}
+		return false, replayHeight
+	}
+
+	loadHeight := app.replayToHeight(replayHeight, app.Logger)
+	err := app.LoadVersion(loadHeight, protocol.KeyMain, true)
+	if err != nil {
+		cmn.Exit(err.Error())
+	}
+	app.Logger.Info(fmt.Sprintf("Load store at %d, start to replay to %d", loadHeight, replayHeight))
+	return true, replayHeight
+
 }
 
 // export the state of iris for a genesis file

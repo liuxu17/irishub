@@ -15,8 +15,8 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/irisnet/irishub/app/protocol"
-	protocolKeeper "github.com/irisnet/irishub/app/protocol/keeper"
 	"github.com/irisnet/irishub/codec"
+	"github.com/irisnet/irishub/modules/auth"
 	"github.com/irisnet/irishub/store"
 	sdk "github.com/irisnet/irishub/types"
 	"github.com/irisnet/irishub/version"
@@ -54,8 +54,6 @@ type BaseApp struct {
 
 	addrPeerFilter   sdk.PeerFilter // filter peers by address and port
 	pubkeyPeerFilter sdk.PeerFilter // filter peers by public key
-	runMsg           RunMsg
-
 	//--------------------
 	// Volatile
 	// checkState is set on initialization and reset on Commit.
@@ -83,13 +81,12 @@ var _ abci.Application = (*BaseApp)(nil)
 // NOTE: The db is used to store the version number for now.
 // Accepts a user-defined txDecoder
 // Accepts variable number of option functions, which act on the BaseApp to set configuration choices
-func NewBaseApp(name string, logger log.Logger, db dbm.DB, txDecoder sdk.TxDecoder, options ...func(*BaseApp)) *BaseApp {
+func NewBaseApp(name string, logger log.Logger, db dbm.DB, options ...func(*BaseApp)) *BaseApp {
 	app := &BaseApp{
-		Logger:    logger,
-		name:      name,
-		db:        db,
-		cms:       store.NewCommitMultiStore(db),
-		txDecoder: txDecoder,
+		Logger: logger,
+		name:   name,
+		db:     db,
+		cms:    store.NewCommitMultiStore(db),
 	}
 
 	for _, option := range options {
@@ -133,15 +130,8 @@ func (app *BaseApp) MountStore(key sdk.StoreKey, typ sdk.StoreType) {
 	app.cms.MountStoreWithDB(key, typ, nil)
 }
 
-////////////////////  iris/cosmos-sdk begin  ///////////////////////////
 func (app *BaseApp) GetKVStore(key sdk.StoreKey) sdk.KVStore {
 	return app.cms.GetKVStore(key)
-}
-
-////////////////////  iris/cosmos-sdk end  ///////////////////////////
-
-func (app *BaseApp) SetRunMsg(runMsg RunMsg) {
-	app.runMsg = runMsg
 }
 
 // panics if called more than once on a running baseapp
@@ -492,7 +482,7 @@ func (app *BaseApp) BeginBlock(req abci.RequestBeginBlock) (res abci.ResponseBeg
 		// by InitChain. Context is now updated with Header information.
 		app.deliverState.ctx = app.deliverState.ctx.
 			WithBlockHeader(req.Header).
-			WithBlockHeight(req.Header.Height)
+			WithBlockHeight(req.Header.Height).WithCheckValidNum(0)
 	}
 
 	// add block gas meter
@@ -512,6 +502,7 @@ func (app *BaseApp) BeginBlock(req abci.RequestBeginBlock) (res abci.ResponseBeg
 	// set the signed validators for addition to context in deliverTx
 	// TODO: communicate this result to the address to pubkey map in slashing
 	app.voteInfos = req.LastCommitInfo.GetVotes()
+
 	return
 }
 
@@ -549,7 +540,9 @@ func (app *BaseApp) DeliverTx(txBytes []byte) (res abci.ResponseDeliverTx) {
 	if err != nil {
 		result = err.Result()
 	} else {
+		// success pass txDecoder
 		result = app.runTx(RunTxModeDeliver, txBytes, tx)
+
 	}
 
 	// Even though the Result.Code is not OK, there are still effects,
@@ -600,10 +593,6 @@ func (app *BaseApp) getContextForTx(mode RunTxMode, txBytes []byte) (ctx sdk.Con
 
 // Iterates through msgs and executes them
 func (app *BaseApp) runMsgs(ctx sdk.Context, msgs []sdk.Msg, mode RunTxMode) (result sdk.Result) {
-	if app.runMsg != nil {
-		return app.runMsg(ctx, msgs, mode)
-	}
-
 	// accumulate results
 	logs := make([]string, 0, len(msgs))
 	var data []byte   // NOTE: we just append them all (?!)
@@ -621,6 +610,8 @@ func (app *BaseApp) runMsgs(ctx sdk.Context, msgs []sdk.Msg, mode RunTxMode) (re
 		var msgResult sdk.Result
 		// Skip actual execution for CheckTx
 		if mode != RunTxModeCheck {
+			ctx = ctx.WithLogger(ctx.Logger().With("module", fmt.Sprintf("iris/%s", msg.Route())).
+				With("handler", msg.Type()))
 			msgResult = handler(ctx, msg)
 		}
 		msgResult.Tags = append(sdk.Tags{sdk.MakeTag(sdk.TagAction, []byte(msg.Type()))}, msgResult.Tags...)
@@ -705,6 +696,19 @@ func (app *BaseApp) runTx(mode RunTxMode, txBytes []byte, tx sdk.Tx) (result sdk
 		return
 	}
 
+	var msgs = tx.GetMsgs()
+	if err := app.Engine.GetCurrentProtocol().ValidateTx(ctx, txBytes, msgs); err != nil {
+		result = err.Result()
+		return
+	}
+	if err := validateBasicTxMsgs(msgs); err != nil {
+		return err.Result()
+	}
+
+	if mode == RunTxModeDeliver {
+		app.deliverState.ctx = app.deliverState.ctx.WithCheckValidNum(app.deliverState.ctx.CheckValidNum() + 1)
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			switch rType := r.(type) {
@@ -754,11 +758,6 @@ func (app *BaseApp) runTx(mode RunTxMode, txBytes []byte, tx sdk.Tx) (result sdk
 		}
 	}()
 
-	var msgs = tx.GetMsgs()
-	if err := validateBasicTxMsgs(msgs); err != nil {
-		return err.Result()
-	}
-
 	feePreprocessHandler := app.Engine.GetCurrentProtocol().GetFeePreprocessHandler()
 	// run the fee handler
 	if feePreprocessHandler != nil && ctx.BlockHeight() != 0 {
@@ -782,16 +781,23 @@ func (app *BaseApp) runTx(mode RunTxMode, txBytes []byte, tx sdk.Tx) (result sdk
 		anteCtx, msCache = app.cacheTxContext(ctx, txBytes)
 
 		newCtx, result, abort := anteHandler(anteCtx, tx, (mode == RunTxModeSimulate))
+		if !newCtx.IsZero() {
+			// At this point, newCtx.MultiStore() is cache-wrapped, or something else
+			// replaced by the ante handler. We want the original multistore, not one
+			// which was cache-wrapped for the ante handler.
+			//
+			// Also, in the case of the tx aborting, we need to track gas consumed via
+			// the instantiated gas meter in the ante handler, so we update the context
+			// prior to returning.
+			ctx = newCtx.WithMultiStore(ms)
+		}
+
 		if abort {
 			return result
 		}
-		if !newCtx.IsZero() {
-			// At this point, newCtx.MultiStore() is cache wrapped,
-			// or something else replaced by anteHandler.
-			// We want the original ms, not one which was cache-wrapped
-			// for the ante handler.
-			ctx = newCtx.WithMultiStore(ms)
-		}
+
+		newCtx.GasMeter().ConsumeGas(auth.BlockStoreCostPerByte*sdk.Gas(len(txBytes)), "blockstore")
+
 		msCache.Write()
 		gasWanted = result.GasWanted
 	}
@@ -820,6 +826,7 @@ func (app *BaseApp) runTx(mode RunTxMode, txBytes []byte, tx sdk.Tx) (result sdk
 
 // EndBlock implements the ABCI application interface.
 func (app *BaseApp) EndBlock(req abci.RequestEndBlock) (res abci.ResponseEndBlock) {
+
 	if app.deliverState.ms.TracingEnabled() {
 		app.deliverState.ms = app.deliverState.ms.ResetTraceContext().(sdk.CacheMultiStore)
 	}
@@ -829,7 +836,7 @@ func (app *BaseApp) EndBlock(req abci.RequestEndBlock) (res abci.ResponseEndBloc
 		res = endBlocker(app.deliverState.ctx, req)
 	}
 
-	appVersionStr, ok := abci.GetTagByKey(res.Tags, protocolKeeper.AppVersionTag)
+	appVersionStr, ok := abci.GetTagByKey(res.Tags, sdk.AppVersionTag)
 	if !ok {
 		return
 	}
@@ -841,16 +848,17 @@ func (app *BaseApp) EndBlock(req abci.RequestEndBlock) (res abci.ResponseEndBloc
 
 	success := app.Engine.Activate(appVersion)
 	if success {
+		app.txDecoder = auth.DefaultTxDecoder(app.Engine.GetCurrentProtocol().GetCodec())
 		return
 	}
 
-	if upgradeConfig, ok := app.Engine.GetUpgradeConfigByStore(app.GetKVStore(protocol.KeyProtocol)); ok {
+	if upgradeConfig, ok := app.Engine.ProtocolKeeper.GetUpgradeConfigByStore(app.GetKVStore(protocol.KeyMain)); ok {
 		res.Tags = append(res.Tags,
 			sdk.MakeTag(tmstate.UpgradeFailureTagKey,
-				[]byte("Please install the right protocol version from "+upgradeConfig.Definition.Software)))
+				[]byte("Please install the right application version from "+upgradeConfig.Protocol.Software)))
 	} else {
 		res.Tags = append(res.Tags,
-			sdk.MakeTag(tmstate.UpgradeFailureTagKey, []byte("Please install the right protocol version")))
+			sdk.MakeTag(tmstate.UpgradeFailureTagKey, []byte("Please install the right application version")))
 	}
 
 	return

@@ -36,38 +36,48 @@ func NewHandler(keeper Keeper) sdk.Handler {
 func handleMsgSubmitProposal(ctx sdk.Context, keeper Keeper, msg MsgSubmitProposal) sdk.Result {
 
 	proposalLevel := GetProposalLevelByProposalKind(msg.ProposalType)
-	if num, ok := keeper.IsMoreThanMaxProposal(ctx, proposalLevel); ok {
+	if num, ok := keeper.HasReachedTheMaxProposalNum(ctx, proposalLevel); ok {
 		return ErrMoreThanMaxProposal(keeper.codespace, num, proposalLevel.string()).Result()
 	}
-	////////////////////  iris begin  ///////////////////////////
+	
 	if msg.ProposalType == ProposalTypeSystemHalt {
-		_, found := keeper.gk.GetProfiler(ctx, msg.Proposer)
+		_, found := keeper.guardianKeeper.GetProfiler(ctx, msg.Proposer)
 		if !found {
 			return ErrNotProfiler(keeper.codespace, msg.Proposer).Result()
 		}
 	}
+
+	if msg.ProposalType == ProposalTypeParameterChange {
+		for _, param := range msg.Params {
+			if p, ok := keeper.paramsKeeper.GetParamSet(param.Subspace); ok {
+				if _, err := p.Validate(param.Key, param.Value); err != nil {
+					return err.Result()
+				}
+			} else {
+				return ErrInvalidParam(DefaultCodespace, param.Subspace).Result()
+			}
+		}
+	}
 	proposal := keeper.NewProposal(ctx, msg.Title, msg.Description, msg.ProposalType, msg.Params)
 
-	////////////////////  iris end  /////////////////////////////
-
-	err, votingStarted := keeper.AddDeposit(ctx, proposal.GetProposalID(), msg.Proposer, msg.InitialDeposit)
+	err, votingStarted := keeper.AddInitialDeposit(ctx, proposal, msg.Proposer, msg.InitialDeposit)
 	if err != nil {
 		return err.Result()
 	}
-	////////////////////  iris begin  ///////////////////////////
+	
 	proposalIDBytes := []byte(strconv.FormatUint(proposal.GetProposalID(), 10))
 
 	var paramBytes []byte
 	if msg.ProposalType == ProposalTypeParameterChange {
 		paramBytes, _ = json.Marshal(proposal.(*ParameterProposal).Params)
 	}
-	////////////////////  iris end  /////////////////////////////
+	
 	resTags := sdk.NewTags(
 		tags.Proposer, []byte(msg.Proposer.String()),
 		tags.ProposalID, proposalIDBytes,
-		////////////////////  iris begin  ///////////////////////////
+		
 		tags.Param, paramBytes,
-		////////////////////  iris end  /////////////////////////////
+		
 	)
 
 	if votingStarted {
@@ -83,12 +93,12 @@ func handleMsgSubmitProposal(ctx sdk.Context, keeper Keeper, msg MsgSubmitPropos
 
 func handleMsgSubmitTxTaxUsageProposal(ctx sdk.Context, keeper Keeper, msg MsgSubmitTxTaxUsageProposal) sdk.Result {
 	proposalLevel := GetProposalLevelByProposalKind(msg.ProposalType)
-	if num, ok := keeper.IsMoreThanMaxProposal(ctx, proposalLevel); ok {
+	if num, ok := keeper.HasReachedTheMaxProposalNum(ctx, proposalLevel); ok {
 		return ErrMoreThanMaxProposal(keeper.codespace, num, proposalLevel.string()).Result()
 	}
 
 	if msg.Usage != UsageTypeBurn {
-		_, found := keeper.gk.GetTrustee(ctx, msg.DestAddress)
+		_, found := keeper.guardianKeeper.GetTrustee(ctx, msg.DestAddress)
 		if !found {
 			return ErrNotTrustee(keeper.codespace, msg.DestAddress).Result()
 		}
@@ -96,7 +106,7 @@ func handleMsgSubmitTxTaxUsageProposal(ctx sdk.Context, keeper Keeper, msg MsgSu
 
 	proposal := keeper.NewUsageProposal(ctx, msg)
 
-	err, votingStarted := keeper.AddDeposit(ctx, proposal.GetProposalID(), msg.Proposer, msg.InitialDeposit)
+	err, votingStarted := keeper.AddInitialDeposit(ctx, proposal, msg.Proposer, msg.InitialDeposit)
 	if err != nil {
 		return err.Result()
 	}
@@ -126,29 +136,29 @@ func handleMsgSubmitTxTaxUsageProposal(ctx sdk.Context, keeper Keeper, msg MsgSu
 
 func handleMsgSubmitSoftwareUpgradeProposal(ctx sdk.Context, keeper Keeper, msg MsgSubmitSoftwareUpgradeProposal) sdk.Result {
 	proposalLevel := GetProposalLevelByProposalKind(msg.ProposalType)
-	if num, ok := keeper.IsMoreThanMaxProposal(ctx, proposalLevel); ok {
+	if num, ok := keeper.HasReachedTheMaxProposalNum(ctx, proposalLevel); ok {
 		return ErrMoreThanMaxProposal(keeper.codespace, num, proposalLevel.string()).Result()
 	}
 
-	if !keeper.pk.IsValidProtocolVersion(ctx, msg.Version) {
+	if !keeper.protocolKeeper.IsValidVersion(ctx, msg.Version) {
 		return ErrCodeInvalidVersion(keeper.codespace, msg.Version).Result()
 	}
 
 	if uint64(ctx.BlockHeight()) > msg.SwitchHeight {
 		return ErrCodeInvalidSwitchHeight(keeper.codespace, uint64(ctx.BlockHeight()), msg.SwitchHeight).Result()
 	}
-	_, found := keeper.gk.GetProfiler(ctx, msg.Proposer)
+	_, found := keeper.guardianKeeper.GetProfiler(ctx, msg.Proposer)
 	if !found {
 		return ErrNotProfiler(keeper.codespace, msg.Proposer).Result()
 	}
 
-	if _, ok := keeper.pk.GetUpgradeConfig(ctx); ok {
+	if _, ok := keeper.protocolKeeper.GetUpgradeConfig(ctx); ok {
 		return ErrSwitchPeriodInProcess(keeper.codespace).Result()
 	}
 
 	proposal := keeper.NewSoftwareUpgradeProposal(ctx, msg)
 
-	err, votingStarted := keeper.AddDeposit(ctx, proposal.GetProposalID(), msg.Proposer, msg.InitialDeposit)
+	err, votingStarted := keeper.AddInitialDeposit(ctx, proposal, msg.Proposer, msg.InitialDeposit)
 	if err != nil {
 		return err.Result()
 	}
@@ -177,9 +187,9 @@ func handleMsgDeposit(ctx sdk.Context, keeper Keeper, msg MsgDeposit) sdk.Result
 		return err.Result()
 	}
 
-	////////////////////  iris begin  ///////////////////////////
+	
 	proposalIDBytes := []byte(strconv.FormatUint(msg.ProposalID, 10))
-	////////////////////  iris end  /////////////////////////////
+	
 
 	// TODO: Add tag for if voting period started
 	resTags := sdk.NewTags(
@@ -203,9 +213,9 @@ func handleMsgVote(ctx sdk.Context, keeper Keeper, msg MsgVote) sdk.Result {
 		return err.Result()
 	}
 
-	////////////////////  iris begin  ///////////////////////////
+	
 	proposalIDBytes := []byte(strconv.FormatUint(msg.ProposalID, 10))
-	////////////////////  iris end  /////////////////////////////
+	
 
 	resTags := sdk.NewTags(
 		tags.Voter, []byte(msg.Voter.String()),
@@ -219,7 +229,7 @@ func handleMsgVote(ctx sdk.Context, keeper Keeper, msg MsgVote) sdk.Result {
 // Called every block, process inflation, update validator set
 func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 
-	logger := ctx.Logger().With("module", "gov")
+	logger := ctx.Logger().With("module", "x/gov")
 
 	resTags = sdk.NewTags()
 
@@ -235,7 +245,7 @@ func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 		keeper.cdc.MustUnmarshalBinaryLengthPrefixed(inactiveIterator.Value(), &proposalID)
 		inactiveProposal := keeper.GetProposal(ctx, proposalID)
 		keeper.SubProposalNum(ctx, inactiveProposal)
-		keeper.RefundDepositsWithoutFee(ctx, proposalID)
+		keeper.DeleteDeposits(ctx, proposalID)
 		keeper.DeleteProposal(ctx, proposalID)
 
 		resTags = resTags.AppendTag(tags.Action, tags.ActionProposalDropped)
@@ -287,7 +297,7 @@ func EndBlocker(ctx sdk.Context, keeper Keeper) (resTags sdk.Tags) {
 		for _, valAddr := range keeper.GetValidatorSet(ctx, proposalID) {
 			if _, ok := votingVals[valAddr.String()]; !ok {
 				val := keeper.ds.GetValidatorSet().Validator(ctx, valAddr)
-				if val != nil {
+				if val != nil && val.GetStatus() == sdk.Bonded {
 					keeper.ds.GetValidatorSet().Slash(ctx,
 						val.GetConsAddr(),
 						ctx.BlockHeight(),

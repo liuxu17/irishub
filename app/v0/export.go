@@ -20,7 +20,7 @@ import (
 )
 
 // export the state of iris for a genesis file
-func (p *ProtocolVersion0) ExportAppStateAndValidators(ctx sdk.Context, forZeroHeight bool) (
+func (p *ProtocolV0)  ExportAppStateAndValidators(ctx sdk.Context, forZeroHeight bool) (
 	appState json.RawMessage, validators []tmtypes.GenesisValidator, err error) {
 
 	if forZeroHeight {
@@ -69,13 +69,13 @@ func (p *ProtocolVersion0) ExportAppStateAndValidators(ctx sdk.Context, forZeroH
 	if err != nil {
 		return nil, nil, err
 	}
-	sdk.MustSortJSON(appState)
+
 	validators = stake.WriteValidators(ctx, p.StakeKeeper)
 	return appState, validators, nil
 }
 
 // prepare for fresh start at zero height
-func (p *ProtocolVersion0) prepForZeroHeightGenesis(ctx sdk.Context) {
+func (p *ProtocolV0) prepForZeroHeightGenesis(ctx sdk.Context) {
 
 	/* Handle fee distribution state. */
 
@@ -142,10 +142,12 @@ func (p *ProtocolVersion0) prepForZeroHeightGenesis(ctx sdk.Context) {
 		p.StakeKeeper.SetUnbondingDelegation(ctx, ubd)
 		return false
 	})
-	// iterate through validators by power descending, reset bond height, update bond intra-tx counter
+	// Iterate through validators by power descending, reset bond and unbonding heights
 	store := ctx.KVStore(protocol.KeyStake)
 	iter := sdk.KVStoreReversePrefixIterator(store, stake.ValidatorsKey)
+	defer iter.Close()
 	counter := int16(0)
+	var valConsAddrs []sdk.ConsAddress
 	for ; iter.Valid(); iter.Next() {
 		addr := sdk.ValAddress(iter.Key()[1:])
 		validator, found := p.StakeKeeper.GetValidator(ctx, addr)
@@ -154,15 +156,24 @@ func (p *ProtocolVersion0) prepForZeroHeightGenesis(ctx sdk.Context) {
 		}
 		validator.BondHeight = 0
 		validator.UnbondingHeight = 0
+		valConsAddrs = append(valConsAddrs, validator.ConsAddress())
 		p.StakeKeeper.SetValidator(ctx, validator)
 		counter++
 	}
-	iter.Close()
 
 	/* Handle slashing state. */
 
-	// we have to clear the slashing periods, since they reference heights
+	// remove all existing slashing periods and recreate one for each validator
 	p.slashingKeeper.DeleteValidatorSlashingPeriods(ctx)
+	for _, valConsAddr := range valConsAddrs {
+		sp := slashing.ValidatorSlashingPeriod{
+			ValidatorAddr: valConsAddr,
+			StartHeight:   0,
+			EndHeight:     0,
+			SlashedSoFar:  sdk.ZeroDec(),
+		}
+		p.slashingKeeper.SetValidatorSlashingPeriod(ctx, sp)
+	}
 
 	// reset start height on signing infos
 	p.slashingKeeper.IterateValidatorSigningInfos(ctx, func(addr sdk.ConsAddress, info slashing.ValidatorSigningInfo) (stop bool) {
